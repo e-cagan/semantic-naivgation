@@ -1,0 +1,26 @@
+semantic_detector_node:
+  ros__parameters:
+    use_sim_time: true
+
+    # TB4 sim exposes the OAK-D under /oakd/rgb/preview/*.
+    # Verified: RGB and depth are both 320x240, depth encoding is 32FC1 (metres),
+    # and the RGB frame_id is oakd_rgb_camera_optical_frame.
+    rgb_topic: /oakd/rgb/preview/image_raw
+    depth_topic: /oakd/rgb/preview/depth
+    camera_info_topic: /oakd/rgb/preview/camera_info
+    sem_pub_topic: /semantic_objects
+
+    model_weights: yolov8n.pt
+    conf_threshold: 0.4
+
+    # Whitelist is deliberately narrow. A costmap cell means "do not drive here",
+    # so the test for inclusion is "does this class change navigation behaviour?",
+    # not "can YOLO recognize it?". Static furniture is already handled by the lidar
+    # layer; phones and books are not obstacles at all.
+    class_list: ['person', 'dog', 'cat']
+    class_radii: [2.0, 1.0, 1.0]
+
+    target_frame: odom
+
+    max_depth: 10.0        # metres (32FC1)
+    min_valid_pixels: 10   # pixel count
