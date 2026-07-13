@@ -1045,7 +1045,7 @@
         <!-- Added person object -->
         <include>
             <name>person_standing</name>
-            <pose>2 0 0 0 0 0</pose>
+            <pose>-2 0 0 0 0 0</pose>
             <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Casual%20female</uri>
         </include>
     </world>

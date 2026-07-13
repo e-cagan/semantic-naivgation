@@ -1,0 +1,16 @@
+<!--
+  Pluginlib needs this to map a class name in a Nav2 param file
+  ("semantic_nav_costmap_plugins/SemanticLayer") to a concrete symbol inside a
+  shared library. The library name here must match the CMake target, and the
+  base_class_type must be the type Nav2 actually looks up (Layer, not CostmapLayer -
+  CostmapLayer is only an implementation convenience for us).
+-->
+<library path="semantic_layer">
+  <class type="semantic_nav_costmap_plugins::SemanticLayer"
+         base_class_type="nav2_costmap_2d::Layer">
+    <description>
+      Costmap layer that paints class-conditional keep-out zones around objects
+      detected by the camera, with per-object confidence decay.
+    </description>
+  </class>
+</library>
