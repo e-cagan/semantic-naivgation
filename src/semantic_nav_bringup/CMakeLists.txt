@@ -19,6 +19,7 @@ install(DIRECTORY
   launch
   params
   worlds
+  rviz
   DESTINATION share/${PROJECT_NAME}
 )
 
