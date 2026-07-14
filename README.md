@@ -343,6 +343,7 @@ Written by Emin Çağan Apaydın.
 ## License
 
 MIT
+
 The `semantic_nav_costmap_plugins` package (the C++ Nav2 layer) was written with AI assistance; I do not write C++. The architecture, the design decisions documented above, and the debugging were mine, and the code is commented accordingly. Everything else — the detector, the message definitions, the integration, the debug tooling — I wrote myself.
 
 I would rather say this plainly than have someone find out in an interview.
