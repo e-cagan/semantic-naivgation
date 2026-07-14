@@ -3,8 +3,8 @@
 <package format="3">
   <name>semantic_nav_detector</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="emin@todo.todo">Emin Cagan Apaydin</maintainer>
+  <description>A package for semantic object detection.</description>
+  <maintainer email="emincaganapaydin@gmail.com">Emin Cagan Apaydin</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>

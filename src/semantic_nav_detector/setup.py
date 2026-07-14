@@ -14,8 +14,8 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Emin Cagan Apaydin',
-    maintainer_email='emin@todo.todo',
-    description='TODO: Package description',
+    maintainer_email='emincaganapaydin@gmail.com',
+    description='A package for semantic object detection.',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
