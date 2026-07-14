@@ -18,17 +18,18 @@ Design contract with the costmap layer:
     stale objects. Silence would be ambiguous (no objects? or detector crashed?).
 """
 
-import rclpy
-from rclpy.node import Node
-from rclpy.time import Time
-from rclpy.duration import Duration
-from rclpy.qos import qos_profile_sensor_data
-
+import cv2
 import message_filters
 import numpy as np
 from sensor_msgs.msg import Image, CameraInfo
 from ultralytics import YOLO
 from cv_bridge import CvBridge
+
+import rclpy
+from rclpy.node import Node
+from rclpy.time import Time
+from rclpy.duration import Duration
+from rclpy.qos import qos_profile_sensor_data
 
 # TF libraries
 import tf2_ros
@@ -75,6 +76,10 @@ class SemanticDetectorNode(Node):
         self.declare_parameter('max_depth', 10.0)      # metres  -> float
         self.declare_parameter('min_valid_pixels', 10)  # pixel count -> int
 
+        # Debug visualization parameters
+        self.declare_parameter('publish_debug_image', True)
+        self.declare_parameter('debug_image_topic', '/semantic_debug_image')
+
         self.rgb_topic = self.get_parameter('rgb_topic').value
         self.depth_topic = self.get_parameter('depth_topic').value
         self.cam_info_topic = self.get_parameter('camera_info_topic').value
@@ -86,6 +91,8 @@ class SemanticDetectorNode(Node):
         self.target_frame = self.get_parameter('target_frame').value
         self.max_depth = self.get_parameter('max_depth').value
         self.min_valid_pixels = self.get_parameter('min_valid_pixels').value
+        self.publish_debug_image = self.get_parameter('publish_debug_image').value
+        self.debug_image_topic = self.get_parameter('debug_image_topic').value
 
         self.bridge = CvBridge()
         self.model = YOLO(model=self.model_weights)
@@ -142,6 +149,10 @@ class SemanticDetectorNode(Node):
             self.sem_pub_topic,
             10
         )
+        
+        # Debug image publisher
+        if self.publish_debug_image:
+            self.debug_pub = self.create_publisher(Image, self.debug_image_topic, 10)
 
         self.get_logger().info('Semantic detector node started, awaiting TF and camera data...')
 
@@ -175,6 +186,9 @@ class SemanticDetectorNode(Node):
         except Exception as e:
             self.get_logger().error(f"Image transformation error: {str(e)}")
             return
+        
+        # Take the copy of cv image for debugging
+        debug_img = cv_image.copy() if self.publish_debug_image else None
 
         # Clip against the DEPTH image, since that is the array being indexed.
         # (Here RGB and depth are both 320x240; if they ever differ, the pixel
@@ -216,52 +230,84 @@ class SemanticDetectorNode(Node):
 
         result = self.model(cv_image, conf=self.conf_threshold, verbose=False)[0]
         boxes = result.boxes
-
+ 
         for box in boxes:
             b = box.cpu().numpy()
             cls_idx = int(b.cls)
             name = self.model.names[cls_idx]   # .cls is an index; names maps it to a string
-
-            # Whitelist check first: never do depth work for an object we will discard.
-            if name not in self.radius_map:
-                continue
-
             conf = float(b.conf)
+ 
             # astype(int) on the whole array - element-wise int() assignment would be
             # silently cast back to float by numpy and break the slicing below.
             x1, y1, x2, y2 = b.xyxy[0].astype(int)
-
+ 
+            # Whitelist check first: never do depth work for an object we will discard.
+            if name not in self.radius_map:
+                if self.publish_debug_image:
+                    # Outline, not filled: a filled box would hide the very object we
+                    # are trying to look at. thickness=-1 only makes sense for shapes
+                    # whose interior we do not care about.
+                    cv2.rectangle(
+                        img=debug_img, pt1=(x1, y1), pt2=(x2, y2),
+                        color=(128, 128, 128), thickness=2
+                    )
+                    # Label sits at the box, not at a fixed screen position - with a
+                    # hardcoded org every label lands on top of every other one.
+                    # y is clamped so a box touching the top edge still gets a visible
+                    # label instead of drawing off-screen at a negative y.
+                    cv2.putText(
+                        img=debug_img, text=f"{name} (not in whitelist)",
+                        org=(x1, max(y1 - 5, 12)),
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.4,
+                        color=(128, 128, 128), thickness=1
+                    )
+                continue
+ 
             w_bbox, h_bbox = (x2 - x1), (y2 - y1)
             u = (x1 + x2) // 2
             v = (y1 + y2) // 2
-
+ 
             # --- Robust depth -------------------------------------------------
             # Sampling the single centre pixel is fragile: on a person it can land
             # between the legs and read the wall behind them, or land on a NaN.
             # Instead take the median over the inner 50% of the bbox - the median is
             # insensitive to the background pixels that leak in at the edges.
             #
-            # Patch SIZE comes from the bbox; clip BOUNDS come from the image. Mixing
+            # Patch SIZE comes from the bbox; clip bounds come from the image. Mixing
             # these up is subtle and silent: numpy reads a negative index from the far
             # side of the array instead of raising.
             u_min = max(0, u - w_bbox // 4)
             u_max = min(w_img, u + w_bbox // 4)
             v_min = max(0, v - h_bbox // 4)
             v_max = min(h_img, v + h_bbox // 4)
-
+ 
             patch = cv_depth[v_min:v_max, u_min:u_max]   # [row, col] == [v, u]
-
+ 
             # Mask BEFORE taking the median - a single NaN poisons np.median, and
             # out-of-range returns (large finite values) would drag it off the object.
             valid = patch[np.isfinite(patch) & (patch > 0.1) & (patch < self.max_depth)]
-
+ 
             # Guard before the median: an empty array yields NaN plus a warning, and a
             # NaN position would propagate all the way into the costmap unnoticed.
             if valid.size < self.min_valid_pixels:
+                if self.publish_debug_image:
+                    cv2.rectangle(
+                        img=debug_img, pt1=(x1, y1), pt2=(x2, y2),
+                        color=(0, 255, 255), thickness=2
+                    )
+                    # The pixel count is the whole point of this label: it is the only
+                    # way to tell whether min_valid_pixels is set sensibly or is quietly
+                    # throwing away good detections.
+                    cv2.putText(
+                        img=debug_img, text=f"{name} REJECTED: depth ({valid.size} px)",
+                        org=(x1, max(y1 - 5, 12)),
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.4,
+                        color=(0, 255, 255), thickness=1
+                    )
                 continue
-
+ 
             z = float(np.median(valid))
-
+ 
             # --- Back-projection (pinhole) --------------------------------------
             # Inverting u = fx*(X/Z) + cx: subtract the principal point to get the
             # offset from the optical axis, divide by focal length to get a normalized
@@ -271,16 +317,16 @@ class SemanticDetectorNode(Node):
             x_cam = (u - self.cx) * z / self.fx
             y_cam = (v - self.cy) * z / self.fy
             z_cam = z
-
+ 
             pt_in_camera = PointStamped()
             pt_in_camera.header.frame_id = rgb_msg.header.frame_id
             pt_in_camera.header.stamp = rgb_msg.header.stamp
             pt_in_camera.point.x = float(x_cam)
             pt_in_camera.point.y = float(y_cam)
             pt_in_camera.point.z = float(z_cam)
-
+ 
             pt_in_target = tf2_geometry_msgs.do_transform_point(pt_in_camera, transform)
-
+ 
             obj = SemanticObject()
             obj.class_id = name
             obj.position = pt_in_target.point
@@ -292,10 +338,46 @@ class SemanticDetectorNode(Node):
                                            # of re-associating by proximity.
             obj.cost_radius = float(self.radius_map[name])
             arr_msg.objects.append(obj)
-
+ 
+            # Accepted detection. This block must live inside the loop: x1, u_min, name
+            # and friends are per-detection. Drawing after the loop would render only the
+            # last box - and crash outright when there were no detections at all, since
+            # the names would never have been bound.
+            if self.publish_debug_image:
+                cv2.rectangle(
+                    img=debug_img, pt1=(x1, y1), pt2=(x2, y2),
+                    color=(0, 255, 0), thickness=2
+                )
+                # The patch outline is the single most useful thing on this image: it
+                # shows exactly which pixels the median depth was taken from. If it is
+                # sitting on the wall behind the person rather than on their body, the
+                # depth is wrong and the object will land in the wrong costmap cell.
+                cv2.rectangle(
+                    img=debug_img, pt1=(u_min, v_min), pt2=(u_max, v_max),
+                    color=(255, 0, 0), thickness=1
+                )
+                cv2.putText(
+                    img=debug_img, text=f"{name} {conf:.2f} | {z:.2f}m",
+                    org=(x1, max(y1 - 5, 12)),
+                    fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=0.4,
+                    color=(0, 255, 0), thickness=1
+                )
+                # The exact pixel fed into the back-projection. If this dot is not on the
+                # person, neither is the 3D point.
+                cv2.circle(
+                    img=debug_img, center=(int(u), int(v)), radius=2,
+                    color=(0, 0, 255), thickness=-1
+                )
+ 
         # Unconditional, outside the loop. An empty objects[] is the "nothing here
         # right now" signal the layer relies on to decay stale objects.
         self.object_pub.publish(arr_msg)
+ 
+        # Also unconditional: an unannotated frame still tells you the camera is alive.
+        if self.publish_debug_image:
+            debug_msg = self.bridge.cv2_to_imgmsg(debug_img, encoding='bgr8')
+            debug_msg.header = rgb_msg.header
+            self.debug_pub.publish(debug_msg)
 
 
 def main(args=None):
